@@ -1,70 +1,69 @@
-import os, threading, time, requests
-from flask import Flask
+from flask import Flask, jsonify
 import yfinance as yf
-import pandas as pd
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import time, traceback
 
 app = Flask(__name__)
 
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+ASSETS = ["EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X","USDCAD=X","USDCHF=X",
+"EURGBP=X","EURJPY=X","GBPJPY=X","XAUUSD=X","XAGUSD=X","BTC-USD","ETH-USD",
+"US30","US500","NAS100","UK100","DE40","JP225","WTI","BRENT","NG=F",
+"AAPL","MSFT","GOOGL","AMZN","TSLA","NVDA","META","NFLX"]
 
-SYMBOLS = {
- "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
- "USDCHF": "USDCHF=X", "AUDUSD": "AUDUSD=X", "USDCAD": "USDCAD=X",
- "NZDUSD": "NZDUSD=X", "GBPJPY": "GBPJPY=X", "EURJPY": "EURJPY=X",
- "EURGBP": "EURGBP=X", "GBPCHF": "GBPCHF=X", "AUDJPY": "AUDJPY=X",
- "EURAUD": "EURAUD=X", "XAUUSD": "GC=F", "XAGUSD": "SI=F",
- "XPTUSD": "PL=F", "US30": "^DJI", "US100": "^NDX",
- "US500": "^GSPC", "US2000": "^RUT", "DE40": "^GDAXI",
- "UK100": "^FTSE", "FR40": "^FCHI", "USOIL": "CL=F",
- "UKOIL": "BZ=F", "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD",
- "SOLUSD": "SOL-USD", "XRPUSD": "XRP-USD", "DOGEUSD": "DOGE-USD",
-}
+CACHE = {"data": [], "time": 0}
 
-def send_telegram(msg):
-    if not TOKEN or not CHAT_ID:
-        print("Telegram pas configure")
-        return
+def get_one(sym):
     try:
-        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": msg}, timeout=10)
-    except Exception as e:
-        print(e)
+        df = yf.Ticker(sym).history(period="1d", interval="15m")
+        if df is None or len(df) < 20:
+            return None
+        price = float(df["Close"].iloc[-1])
+        prev = float(df["Close"].iloc[-20])
+        change = (price - prev) / prev * 100
+        signal = "ACHAT" if change > 0 else "VENTE"
+        return {"symbol": sym, "price": round(price, 4), "change": round(change, 2), "signal": signal}
+    except Exception:
+        return None
 
-def check_one(name, yf_symbol):
+def update():
     try:
-        df = yf.download(yf_symbol, period="2d", interval="15m", progress=False)
-        if len(df) < 5: return
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        last = df.iloc[-1]
-        price = float(last["Close"])
-        change = (float(last["Close"]) - float(last["Open"])) / float(last["Open"]) * 100
-        if change > 0.15:
-            send_telegram(f"📈 SIGNAL BUY {name}\nPrix: {price}\nStrategie: Order Block + FVG\nSession: 09h-18h\nPrends le trade a la main sur Upcomers")
-        elif change < -0.15:
-            send_telegram(f"📉 SIGNAL SELL {name}\nPrix: {price}\nStrategie: Order Block + FVG\nSession: 09h-18h\nPrends le trade a la main sur Upcomers")
-    except Exception as e:
-        print(name, e)
-
-def loop():
-    send_telegram("✅ Bot Signaux demarre - 30 actifs - Upcomers - Mode SIGNAUX seulement")
-    while True:
-        h = datetime.now().hour
-        if 9 <= h <= 18:
-            for name, sym in SYMBOLS.items():
-                check_one(name, sym)
-                time.sleep(2)
-        time.sleep(900)
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            res = list(ex.map(get_one, ASSETS))
+        data = [r for r in res if r]
+        if data:
+            CACHE["data"] = data
+            CACHE["time"] = time.time()
+    except Exception:
+        print(traceback.format_exc())
 
 @app.route("/")
 def home():
-    return "BOT MT5 EN LIGNE - Signaux Upcomers - 30 actifs"
+    return """
+    <html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>BOT MT5 EN LIGNE - Signaux Upcomers - 30 actifs</title>
+    <style>body{font-family:Arial;background:#0f172a;color:white;padding:15px}table{width:100%;border-collapse:collapse}td,th{padding:10px;border-bottom:1px solid #334155;text-align:left}.up{color:#22c55e}.down{color:#ef4444}.box{background:#1e293b;padding:12px;border-radius:10px}</style></head>
+    <body><h2>🤖 BOT MT5 EN LIGNE</h2><p>Signaux Upcomers - 30 actifs</p><div class='box' id='box'>Chargement...</div>
+    <script>
+    async function load(){
+      try{
+        let r = await fetch('/api/signals'); let j = await r.json();
+        if(!j.signals || !j.signals.length){ document.getElementById('box').innerHTML='Pas de données, réessaie dans 30s...'; return; }
+        let h='<table><tr><th>Actif</th><th>Prix</th><th>Signal</th></tr>';
+        j.signals.forEach(s=>{ h+=`<tr><td>${s.symbol}</td><td>${s.price}</td><td class='${s.signal=='ACHAT'?'up':'down'}'><b>${s.signal}</b> (${s.change}%)</td></tr>` });
+        document.getElementById('box').innerHTML=h+'</table>';
+      }catch(e){ document.getElementById('box').innerHTML='Erreur de chargement, actualise.'; }
+    }
+    load(); setInterval(load, 30000);
+    </script></body></html>
+    """
 
-@app.route("/status")
-def status():
-    return {"status": "ok", "mode": "signaux", "broker": "Upcomers", "actifs": 30}
+@app.route("/api/signals")
+def signals():
+    if CACHE["data"] and time.time() - CACHE["time"] < 60:
+        return jsonify({"signals": CACHE["data"]})
+    update()
+    return jsonify({"signals": CACHE["data"]})
 
 if __name__ == "__main__":
-    threading.Thread(target=loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    update()
+    app.run(host="0.0.0.0", port=10000)

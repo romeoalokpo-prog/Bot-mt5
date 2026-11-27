@@ -1,13 +1,13 @@
 from flask import Flask, jsonify
 import yfinance as yf
-import requests, time, threading, traceback
+import requests, time, threading, traceback, os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 app = Flask(__name__)
 
-TELEGRAM_TOKEN = "8877516088:AAGdxUGYVTUdVT9yrXSCAXHvNLP4WjElbHE"
-CHAT_ID = "7884780716"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID", "7884780716")
 
 ASSETS = {
  "EURUSD":"EURUSD=X","GBPUSD":"GBPUSD=X","USDJPY":"USDJPY=X","USDCHF":"USDCHF=X","AUDUSD":"AUDUSD=X","USDCAD":"USDCAD=X","NZDUSD":"NZDUSD=X",
